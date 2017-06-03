@@ -23,7 +23,6 @@ func reader2channel(r io.Reader, ch chan string) {
 type Tail struct {
 	Input    chan string
 	LastLnum int
-	Follow   bool
 }
 
 func NewTail(r io.Reader) *Tail {
@@ -33,7 +32,6 @@ func NewTail(r io.Reader) *Tail {
 	return &Tail{
 		Input:    in,
 		LastLnum: 0,
-		Follow:   false,
 	}
 }
 
@@ -46,17 +44,17 @@ func (this *Tail) Run(w io.Writer, nlines int) (eof bool) {
 	for {
 		select {
 		case line, ok := <-this.Input:
-			cancel()
 			if ok { // Not Found EOF and Continue
 				buffer[this.LastLnum%nlines] = line
 				this.LastLnum++
 				break
 			} else { // Found EOF
 				eof = true
+				cancel()
 				goto exit
 			}
 		case <-ctx.Done(): // Timeout
-			if stop == this.LastLnum || this.Follow {
+			if stop == this.LastLnum {
 				// no lines read since last timeout
 				eof = false
 				goto exit
@@ -74,33 +72,60 @@ exit:
 	for ; start < this.LastLnum; start++ {
 		fmt.Fprintln(w, buffer[start%nlines])
 	}
-	return
-}
-
-func Follow(r io.Reader, w io.Writer, nlines int, follow bool) {
-	tail := NewTail(r)
-	tail.Follow = follow
-	for !tail.Run(w, nlines) {
-
+	if f, ok := w.(*os.File); ok {
+		f.Sync()
 	}
 	return
 }
 
-var option_nlines = flag.Int("n", 10, "output the last NUM lines, instead of the last 10")
+func Follow(r io.Reader, w io.Writer, nlines int, d time.Duration) {
+	tail := NewTail(r)
+	for !tail.Run(w, nlines) {
+		time.Sleep(d)
+	}
+	return
+}
 
-func Main() error {
-	args := flag.Args()
-	if len(args) > 0 {
-		for _, fname := range args {
-			fd, err := os.Open(fname)
+func Watch(fname string, w io.Writer, d time.Duration) error {
+	var pos int64 = 0
+	for {
+		fd, err := os.Open(fname)
+		if err != nil {
+			return err
+		}
+		if pos > 0 {
+			stat, err := fd.Stat()
 			if err != nil {
+				fd.Close()
 				return err
 			}
-			Follow(fd, os.Stdout, *option_nlines, true)
-			fd.Close()
+			if stat.Size() < pos {
+				fmt.Fprintf(os.Stderr, "(%s shrinked)\n", fname)
+			} else if _, err = fd.Seek(pos, 0); err != nil {
+				fd.Close()
+				return err
+			}
 		}
+		Follow(fd, w, *option_nlines, d)
+		pos, err = fd.Seek(0, 1)
+		fd.Close()
+		if err != nil {
+			return err
+		}
+		time.Sleep(d)
+	}
+}
+
+var option_nlines = flag.Int("n", 10, "output the last NUM lines, instead of the last 10")
+var option_sleep_interval = flag.Int("s", 1, "sleep for approximately N seconds(default 1.0)")
+
+func Main() error {
+	d := time.Duration(*option_sleep_interval) * time.Second
+	args := flag.Args()
+	if len(args) > 0 {
+		return Watch(args[0], os.Stdout, d)
 	} else {
-		Follow(os.Stdin, os.Stdout, *option_nlines, true)
+		Follow(os.Stdin, os.Stdout, *option_nlines, d)
 	}
 	return nil
 }
