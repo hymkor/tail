@@ -116,16 +116,50 @@ func Watch(fname string, w io.Writer, d time.Duration) error {
 	}
 }
 
+func SimpleTail(r io.Reader, w io.Writer, nlines int) {
+	lines := make([]string, nlines)
+	i := 0
+	scnr := bufio.NewScanner(r)
+	for scnr.Scan() {
+		lines[i%nlines] = scnr.Text()
+		i++
+	}
+	start := 0
+	if i > nlines {
+		start = i - nlines
+	}
+	for j := start; j < i; j++ {
+		fmt.Fprintln(w, lines[j%nlines])
+	}
+
+}
+
 var option_nlines = flag.Int("n", 10, "output the last NUM lines, instead of the last 10")
 var option_sleep_interval = flag.Int("s", 1, "sleep for approximately N seconds(default 1.0)")
+
+var option_follow = flag.Bool("f", false, "output appended data as the file grows")
 
 func Main() error {
 	d := time.Duration(*option_sleep_interval) * time.Second
 	args := flag.Args()
 	if len(args) > 0 {
-		return Watch(args[0], os.Stdout, d)
+		if *option_follow {
+			return Watch(args[0], os.Stdout, d)
+		} else {
+			fd, err := os.Open(args[0])
+			if err != nil {
+				return err
+			}
+			defer fd.Close()
+			SimpleTail(fd, os.Stdout, *option_nlines)
+			return nil
+		}
 	} else {
-		Follow(os.Stdin, os.Stdout, *option_nlines, d)
+		if *option_follow {
+			Follow(os.Stdin, os.Stdout, *option_nlines, d)
+		} else {
+			SimpleTail(os.Stdin, os.Stdout, *option_nlines)
+		}
 	}
 	return nil
 }
