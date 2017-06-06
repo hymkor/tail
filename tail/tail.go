@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -37,9 +36,8 @@ func NewTail(r io.Reader) *Tail {
 
 func (this *Tail) Run(w io.Writer, nlines int) (eof bool) {
 	buffer := make([]string, nlines)
+	ticker := time.NewTicker(time.Second)
 	start := this.LastLnum
-	baseCtx := context.Background()
-	ctx, cancel := context.WithTimeout(baseCtx, time.Second)
 	stop := this.LastLnum
 	for {
 		select {
@@ -50,22 +48,22 @@ func (this *Tail) Run(w io.Writer, nlines int) (eof bool) {
 				break
 			} else { // Found EOF
 				eof = true
-				cancel()
 				goto exit
 			}
-		case <-ctx.Done(): // Timeout
+		case <-ticker.C:
 			if stop == this.LastLnum {
 				// no lines read since last timeout
 				eof = false
 				goto exit
 			} else {
 				// refresh Timeout
-				ctx, cancel = context.WithTimeout(baseCtx, time.Second)
 				stop = this.LastLnum
+				break
 			}
 		}
 	}
 exit:
+	ticker.Stop()
 	if this.LastLnum-nlines > start {
 		start = this.LastLnum - nlines
 	}
@@ -150,9 +148,8 @@ func Main() error {
 			if err != nil {
 				return err
 			}
-			defer fd.Close()
 			SimpleTail(fd, os.Stdout, *option_nlines)
-			return nil
+			fd.Close()
 		}
 	} else {
 		if *option_follow {
